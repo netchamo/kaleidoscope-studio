@@ -1,0 +1,33 @@
+{
+  "id": "/kaleidoscope-studio/",
+  "name": "קליידוסקופ",
+  "short_name": "קליידוסקופ",
+  "description": "עריכת וידאו בצבעים חמים",
+  "lang": "he",
+  "dir": "rtl",
+  "start_url": "/kaleidoscope-studio/",
+  "scope": "/kaleidoscope-studio/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#120d0b",
+  "theme_color": "#120d0b",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "prefer_related_applications": false
+}
