@@ -1,0 +1,24 @@
+// Trusted Web Activity: the app opens the live site in Chrome's engine, so web updates reach it instantly.
+plugins { id 'com.android.application' }
+android {
+  namespace 'io.github.netchamo.kaleidoscope'
+  compileSdk 34
+  defaultConfig {
+    applicationId 'io.github.netchamo.kaleidoscope'
+    minSdk 21
+    targetSdk 34
+    versionCode((System.getenv('VERSION_CODE') ?: '1') as int)
+    versionName '1.0.' + (System.getenv('VERSION_CODE') ?: '1')
+  }
+  signingConfigs {
+    release {
+      storeFile file('../kaleidoscope.keystore')
+      storePassword 'kaleidoscope-studio'
+      keyAlias 'kaleidoscope'
+      keyPassword 'kaleidoscope-studio'
+    }
+  }
+  buildTypes { release { minifyEnabled false; signingConfig signingConfigs.release } }
+  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+dependencies { implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0' }

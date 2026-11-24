@@ -58,6 +58,9 @@ async function showHome() {
   }
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   $('#installTip').hidden = standalone || !/iPhone|iPad/.test(navigator.userAgent);
+  const inApk = /source=android/.test(location.search) || document.referrer.startsWith('android-app://') || sessionStorage.getItem('apk') === '1';
+  if (inApk) try { sessionStorage.setItem('apk', '1'); } catch (e) {}
+  const apk = $('#apkLink'); if (apk) apk.hidden = inApk || standalone || !/Android/.test(navigator.userAgent);
 }
 on('#newFiles', 'change', async e => {
   const fs = [...e.target.files]; e.target.value = ''; if (!fs.length) return;
