@@ -13,7 +13,7 @@ const vec3 LW=vec3(.2126,.7152,.0722);
 vec3 lut3(sampler3D s, vec3 c){ return texture(s, clamp(c,0.,1.)*(16./17.)+.5/17.).rgb; }
 `;
 const FS_GRADE = COMMON + `
-uniform sampler2D uVid; uniform sampler3D uFix, uStyle;
+uniform sampler2D uVid; uniform sampler3D uFix, uStyle; uniform float uStyleN;
 uniform float uHdr,uUseStyle,uPal,uExp,uCon,uSat,uHi,uSh,uWarm,uTint,uTone,uColor,uFog,uTime,uLight,uLightSize,uWb;
 uniform vec2 uRes,uLightPos,uZoomC,uCrop; uniform float uZoom;
 void main(){
@@ -29,7 +29,7 @@ void main(){
   c=(c-l)+( (l-.45)*(1.+uCon*.6)+.45 );
   l=dot(c,LW); c=l+(c-l)*(1.+uSat);
   c*=vec3(1.+uWarm*.08,1.+uTint*.06,1.-uWarm*.1);
-  if(uUseStyle>.5) c=mix(c,lut3(uStyle,c),uPal);
+  if(uUseStyle>.5) c=mix(c,texture(uStyle,clamp(c,0.,1.)*((uStyleN-1.)/uStyleN)+.5/uStyleN).rgb,uPal);
   // pad: tone (depth/contrast, shadows to blue) and color (saturation)
   c=(c-.45)*(1.+uTone*.35)+.45-uTone*.025;
   float sh=1.-smoothstep(0.,.45,dot(c,LW)); c+=vec3(-.02,0.,.03)*uTone*sh;
@@ -117,7 +117,7 @@ export class Renderer {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     this.vid = this.tex(); this.over = this.tex();
     this.luts = { hlgfix: this.lut3(LUTS.hlgfix), zahav: this.lut3(LUTS.zahav) };
-    this.fbo = {};
+    this.fbo = {}; this.lutN = {}; this.dims = [16, 9];
   }
   prog(fs) {
     const gl = this.gl;
@@ -137,12 +137,13 @@ export class Renderer {
     if (w) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     return t;
   }
-  lut3(b64) {
+  addLut(id, data, n = 17) { this.lutN[id] = n; if (this.luts[id]) this.gl.deleteTexture(this.luts[id]); this.luts[id] = this.lut3(data, n); }
+  lut3(b64, n = 17) {
     const gl = this.gl, t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_3D, t);
     for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    const raw = atob(b64); const a = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) a[i] = raw.charCodeAt(i);
-    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, 17, 17, 17, 0, gl.RGBA, gl.UNSIGNED_BYTE, a);
+    let a = b64; if (typeof b64 === 'string') { const raw = atob(b64); a = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) a[i] = raw.charCodeAt(i); }
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, n, n, n, 0, gl.RGBA, gl.UNSIGNED_BYTE, a);
     return t;
   }
   setSize(w, h) {
@@ -157,10 +158,13 @@ export class Renderer {
   // c: color settings, fx: effect settings (see state.js defaults); hdr: bool; fade 0..1
   draw(source, time, c, fx, hdr, fade = 0, zoom = null, overlay = null) {
     const gl = this.gl, w = this.canvas.width, h = this.canvas.height, F = this.fbo;
-    gl.bindTexture(gl.TEXTURE_2D, this.vid);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    if (source) {
+      gl.bindTexture(gl.TEXTURE_2D, this.vid);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      this.dims = [source.videoWidth || source.width, source.videoHeight || source.height];
+    }
     let g = this.p.grade; gl.useProgram(g.p);
     gl.bindFramebuffer(gl.FRAMEBUFFER, F.main.f); gl.viewport(0, 0, w, h);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.vid); gl.uniform1i(g.u.uVid, 0);
@@ -168,6 +172,7 @@ export class Renderer {
     const styleTex = c.style && this.luts[c.style];
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_3D, styleTex || this.luts.zahav); gl.uniform1i(g.u.uStyle, 2);
     const U = (n, x) => g.u[n] !== undefined && gl.uniform1f(g.u[n], x);
+    U('uStyleN', (styleTex && this.lutN[c.style]) || 17);
     U('uHdr', hdr ? 1 : 0); U('uUseStyle', styleTex ? 1 : 0); U('uPal', c.pal / 100);
     U('uExp', c.exposure / 100); U('uCon', c.contrast / 100); U('uSat', c.saturation / 100);
     U('uHi', c.highlights / 100); U('uSh', c.shadows / 100); U('uWarm', c.warmth / 100); U('uTint', c.tint / 100);
@@ -175,7 +180,7 @@ export class Renderer {
     U('uLight', fx.light / 100); U('uLightSize', .15 + fx.lightSize / 100 * .6);
     gl.uniform2f(g.u.uLightPos, fx.lightX, fx.lightY);
     U('uZoom', zoom ? zoom.s : 1);
-    { const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height; const sa = sw / sh, da = w / h;
+    { const [sw, sh] = this.dims; const sa = sw / sh, da = w / h;
       gl.uniform2f(g.u.uCrop, sa > da ? da / sa : 1, sa > da ? 1 : sa / da); } gl.uniform2f(g.u.uZoomC, zoom ? zoom.x : .5, zoom ? zoom.y : .5); gl.uniform2f(g.u.uRes, w, h);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // soft chain (used by glow, halation, dream, edge blur)

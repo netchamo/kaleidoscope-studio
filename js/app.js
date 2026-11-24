@@ -5,6 +5,7 @@ import { layout, at, videoFade, audioGain, zoomAt, fmt } from './timeline.js';
 import { buildChain, REVERBS, DELAY_NOTES, meterLevels, detectBeats, decodeFile } from './audio.js';
 import { FONTS, ANIMS, DECOS, COLORS, linkFonts, ensureFont, newText, drawTexts, loadStickers, saveSticker, removeSticker } from './text.js';
 import { exportProject, outSize } from './export.js';
+import { customStyles, addStyle, removeStyle, profiles, addProfile, removeProfile, parseCube, learnFromExport } from './profiles.js';
 import { store, newProject, newClip, STYLES, LOOKS, PRESETS, FX_DEFAULT, COLOR_DEFAULT } from './state.js';
 
 const $ = s => document.querySelector(s);
@@ -140,7 +141,7 @@ async function openProject(p) {
 function enterEditor() {
   $('#home').hidden = true; $('#editor').hidden = false;
   $('#projName').value = P.name;
-  if (!renderer) { try { renderer = new Renderer($('#view')); } catch (e) { toast('המכשיר לא תומך בעיבוד גרפי'); return; } }
+  if (!renderer) { try { renderer = new Renderer($('#view')); for (const s of customStyles()) renderer.addLut(s.id, s.data, s.n); } catch (e) { toast('המכשיר לא תומך בעיבוד גרפי'); log(e.message); return; } }
   sel = P.clips[0]?.id || null; T = 0; curIdx = -1;
   P.texts = P.texts || []; linkFonts(); snapshot();
   sizePreview(); renderTimeline(); showTab(currentTab); seekTo(0); updUndo();
@@ -161,10 +162,11 @@ let drawQueued = false;
 function requestDraw() { if (drawQueued || playing) return; drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawNow(); }); }
 function drawNow() {
   if (!P || !P.clips.length || !renderer) return;
-  const a = at(P, T); if (!a) return; const m = media[a.clip.id]; if (!m || m.video.readyState < 2) return;
+  const a = at(P, T); if (!a) return; const m = media[a.clip.id]; if (!m) return;
+  const src = m.video.readyState >= 2 ? m.video : null;
   const ov = textOverlay(T);
-  if (comparing) renderer.draw(m.video, T, NEUTRAL_C, NEUTRAL_FX, m.hdr && P.color.hdr !== 'off', 0, null, null);
-  else renderer.draw(m.video, T, P.color, P.fx, m.hdr && P.color.hdr !== 'off', videoFade(a.clip, a.local, a.len), zoomAt(a.clip, a.local), ov);
+  if (comparing) renderer.draw(src, T, NEUTRAL_C, NEUTRAL_FX, m.hdr && P.color.hdr !== 'off', 0, null, null);
+  else renderer.draw(src, T, P.color, P.fx, m.hdr && P.color.hdr !== 'off', videoFade(a.clip, a.local, a.len), zoomAt(a.clip, a.local), ov);
   updateClock();
 }
 const NEUTRAL_C = { ...COLOR_DEFAULT, style: null, pal: 0 }, NEUTRAL_FX = { ...FX_DEFAULT };
@@ -245,11 +247,19 @@ function syncMusic() {
   if (mu.fadeOut > 0 && local > len - mu.fadeOut) gv *= Math.max(0, (len - local) / mu.fadeOut);
   if (musicGain) musicGain.gain.value = gv; else musicEl.volume = Math.min(1, gv);
 }
+let kicking = false;
+async function kick(v) {
+  if (v.readyState >= 2 || kicking || playing) return; kicking = true;
+  const m = v.muted, t = v.currentTime; v.muted = true;
+  try { await v.play(); await once(v, 'timeupdate', 800); } catch (e) {}
+  v.pause(); v.muted = m; if (Math.abs(v.currentTime - t) > .05) { v.currentTime = t; await once(v, 'seeked', 1500); }
+  kicking = false; drawNow();
+}
 function seekTo(t) {
   const L = layout(P); T = Math.max(0, Math.min(t, L.total)); const a = at(P, T); if (!a) return;
   const v = media[a.clip.id].video; curIdx = -1;
   const want = a.clip.in + a.local;
-  if (Math.abs(v.currentTime - want) > .01) { v.addEventListener('seeked', () => drawNow(), { once: true }); v.currentTime = want; } else drawNow();
+  if (Math.abs(v.currentTime - want) > .01) { v.addEventListener('seeked', () => { drawNow(); kick(v); }, { once: true }); v.currentTime = want; } else { drawNow(); kick(v); }
   updateClock();
 }
 
@@ -411,8 +421,31 @@ function placeDot() { if (!pick) return; const [x, y] = pick.get(); const d = $(
 /* ---------- color panel ---------- */
 function panelColor(p) {
   const C = P.color;
-  p.append(sec('סגנון', chips(STYLES, C.style, s => { C.style = s.id; changed(); }, true),
-    slider('לוח צבעים', C, 'pal', 0, 100, 1, { def: 100 })));
+  const mine = customStyles();
+  const styleRow = chips([...STYLES, ...mine.map(s => ({ id: s.id, name: s.name, mine: true }))], C.style, s => { C.style = s.id; changed(); }, true);
+  styleRow.querySelectorAll('.chip').forEach((b, i) => { const s = [...STYLES, ...mine][i]; if (!s || !mine.includes(s)) return; b.classList.add('mine');
+    let pt; b.addEventListener('pointerdown', () => { pt = setTimeout(() => { removeStyle(s.id); if (C.style === s.id) C.style = 'zahav'; toast('הסגנון נמחק'); renderPanel(); changed(); }, 900); });
+    b.addEventListener('pointerup', () => clearTimeout(pt)); b.addEventListener('pointerleave', () => clearTimeout(pt)); });
+  const cubeIn = el('input', { type: 'file', accept: '.cube,text/plain', hidden: '' });
+  cubeIn.addEventListener('change', async () => { const f = cubeIn.files[0]; if (!f) return;
+    try { const { bytes, n } = parseCube(await f.text()); const st = addStyle(f.name.replace(/\.[^.]+$/, ''), bytes, n);
+      if (!st) throw new Error('אין מקום לשמור'); renderer.addLut(st.id, bytes, n); C.style = st.id; toast('הסגנון נוסף'); renderPanel(); changed(); }
+    catch (e) { toast(e.message); } });
+  p.append(sec('סגנון', styleRow, slider('לוח צבעים', C, 'pal', 0, 100, 1, { def: 100 }),
+    el('div', { class: 'row', style: 'margin-top:6px' },
+      el('button', { class: 'btn', onclick: () => learnSheet() }, '+ סגנון מקאפקאט'),
+      el('button', { class: 'btn', onclick: () => cubeIn.click() }, '+ קובץ צבע'), cubeIn),
+    mine.length ? el('div', { class: 'hint' }, 'סגנונות שלך מסומנים בקו מקווקו. לחיצה ארוכה מוחקת.') : null));
+  const profs = profiles();
+  const nameIn = el('input', { class: 'tinput one', placeholder: 'שם לפרופיל', dir: 'rtl' });
+  const profRow = el('div', { class: 'chips-scroll' });
+  for (const pr of profs) { const b = el('button', { class: 'chip mine' }, pr.name);
+    b.addEventListener('click', () => { Object.assign(P.color, pr.color); if (pr.fx) Object.assign(P.fx, pr.fx); renderPanel(); changed(); toast('הופעל: ' + pr.name); });
+    let pt; b.addEventListener('pointerdown', () => { pt = setTimeout(() => { removeProfile(pr.id); toast('הפרופיל נמחק'); renderPanel(); }, 900); });
+    b.addEventListener('pointerup', () => clearTimeout(pt)); b.addEventListener('pointerleave', () => clearTimeout(pt)); profRow.append(b); }
+  p.append(sec('הפרופילים שלי', profs.length ? profRow : el('div', { class: 'hint' }, 'שומרים כאן שילוב של סגנון, תיקונים ואפקטים, ומפעילים בלחיצה אחת בכל פרויקט.'),
+    el('div', { class: 'row', style: 'margin-top:8px;flex-wrap:nowrap' }, nameIn,
+      el('button', { class: 'btn primary', onclick: () => { const n = nameIn.value.trim() || ('פרופיל ' + (profs.length + 1)); addProfile(n, P.color, P.fx); toast('נשמר'); renderPanel(); } }, 'שמירה'))));
   // pad
   const pad = el('div', { class: 'pad' }, el('div', { class: 'grid' })), dot = el('div', { class: 'dot' }); pad.append(dot);
   const vt = el('b', {}, C.tone), vc = el('b', {}, C.color);
@@ -631,6 +664,60 @@ function showResult(box, r, took) {
   row.append(el('a', { class: 'btn', href: url, download: name }, 'שמירה'));
   box.append(row);
 }
+
+/* ---------- learn a style from CapCut ---------- */
+function openSheet(...kids) { const c = $('#sheetCard'); c.innerHTML = ''; c.append(...kids); $('#sheet').hidden = false; }
+function closeSheet() { $('#sheet').hidden = true; }
+$('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') closeSheet(); });
+function learnSheet() {
+  const fileIn = el('input', { type: 'file', accept: 'video/*', hidden: '' });
+  const nameIn = el('input', { class: 'tinput one', placeholder: 'שם הסגנון, למשל אחד מקאפקאט', dir: 'rtl' });
+  const status = el('div', { class: 'hint' });
+  const saveMaster = async () => {
+    try { const b = await (await fetch('calib/master.mp4')).blob(); const f = new File([b], 'kaleidoscope-calibration.mp4', { type: 'video/mp4' });
+      if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f] });
+      else { const a = el('a', { href: URL.createObjectURL(b), download: f.name }); document.body.append(a); a.click(); a.remove(); } }
+    catch (e) { if (e.name !== 'AbortError') toast('השמירה נכשלה'); } };
+  fileIn.addEventListener('change', async () => {
+    const f = fileIn.files[0]; if (!f) return; const name = nameIn.value.trim() || ('סגנון ' + (customStyles().length + 1));
+    status.textContent = 'קורא את הסרטון…';
+    const v = makeVideo(f);
+    try {
+      await loaded(v);
+      const grab = async t => { v.currentTime = t; await once(v, 'seeked', 3000); if ('requestVideoFrameCallback' in v) await new Promise(r => { v.requestVideoFrameCallback(() => r()); setTimeout(r, 500); }); if (v.readyState < 2) { try { await v.play(); await once(v, 'timeupdate', 800); } catch (e) {} v.pause(); } };
+      const r = await learnFromExport(v, grab, p => { status.textContent = 'מודד צבעים… ' + Math.round(p * 100) + '%'; });
+      log('למידת סגנון: ' + JSON.stringify(r.pages) + ' עוצמה ' + r.strength.toFixed(1));
+      const st = addStyle(name, r.bytes, r.n); if (!st) throw new Error('אין מקום לשמור את הסגנון');
+      renderer.addLut(st.id, r.bytes, r.n); P.color.style = st.id; P.color.pal = 100;
+      closeSheet(); toast('הסגנון "' + name + '" נוסף' + (r.strength < 2 ? ' (נראה שלא הופעל פילטר)' : '')); renderPanel(); changed();
+    } catch (e) { status.textContent = e.message; log(e.message); }
+    finally { URL.revokeObjectURL(v.src); v.remove(); }
+  });
+  openSheet(el('h2', {}, 'סגנון חדש מקאפקאט'),
+    el('ol', { class: 'steps' },
+      el('li', {}, el('b', {}, 'שומרים את סרטון הכיול'), ' לגלריה.'),
+      el('li', {}, 'בקאפקאט מייבאים אותו, מפעילים ', el('b', {}, 'פילטר אחד'), ' בלי חיתוך, זום או שיפור אוטומטי.'),
+      el('li', {}, 'מייצאים ב־1080, בקצב הכי גבוה.'),
+      el('li', {}, 'נותנים שם ובוחרים כאן את הקובץ שיצא.')),
+    el('button', { class: 'btn', onclick: saveMaster }, 'שמירת סרטון הכיול'),
+    nameIn, el('button', { class: 'btn primary', onclick: () => fileIn.click() }, 'בחירת הקובץ מקאפקאט'), fileIn, status,
+    el('button', { class: 'btn', onclick: closeSheet }, 'סגירה'));
+}
+
+/* ---------- resizable panel ---------- */
+(() => {
+  const g = $('#grab'); const root = document.documentElement;
+  let h = +(localStorage.getItem('kaleidoscope.panelH') || 0) || Math.round(innerHeight * .42);
+  const apply = () => { h = Math.max(140, Math.min(innerHeight * .78, h)); root.style.setProperty('--panelH', h + 'px'); };
+  apply();
+  let y0 = 0, h0 = 0;
+  g.addEventListener('pointerdown', e => { g.setPointerCapture(e.pointerId); y0 = e.clientY; h0 = h; g.classList.add('drag'); });
+  g.addEventListener('pointermove', e => { if (!g.hasPointerCapture(e.pointerId)) return; h = h0 + (y0 - e.clientY); apply(); });
+  g.addEventListener('pointerup', () => { g.classList.remove('drag');
+    const snaps = [innerHeight * .26, innerHeight * .42, innerHeight * .62, innerHeight * .78]; h = snaps.reduce((a, b) => Math.abs(b - h) < Math.abs(a - h) ? b : a); apply();
+    try { localStorage.setItem('kaleidoscope.panelH', Math.round(h)); } catch (e) {} requestDraw(); });
+  g.addEventListener('dblclick', () => { h = h > innerHeight * .5 ? innerHeight * .3 : innerHeight * .65; apply(); });
+})();
 
 /* ---------- toolbar extras ---------- */
 $('#undoBtn').addEventListener('click', undo); $('#redoBtn').addEventListener('click', redo);
