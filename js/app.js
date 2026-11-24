@@ -2,14 +2,20 @@
 import { Renderer } from './gl.js';
 import { detectTransfer } from './media.js';
 import { layout, at, videoFade, audioGain, zoomAt, fmt } from './timeline.js';
-import { buildChain, REVERBS, DELAY_NOTES, meterLevels } from './audio.js';
+import { buildChain, REVERBS, DELAY_NOTES, meterLevels, detectBeats, decodeFile } from './audio.js';
+import { FONTS, ANIMS, DECOS, COLORS, linkFonts, ensureFont, newText, drawTexts, loadStickers, saveSticker, removeSticker } from './text.js';
 import { exportProject, outSize } from './export.js';
-import { store, newProject, newClip, STYLES, LOOKS, PRESETS, FX_DEFAULT } from './state.js';
+import { store, newProject, newClip, STYLES, LOOKS, PRESETS, FX_DEFAULT, COLOR_DEFAULT } from './state.js';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== null) e.setAttribute(k, v); }
   for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k)); return e; };
+const LOG = [];
+export function log(m) { LOG.push(new Date().toLocaleTimeString('he-IL') + '  ' + m); if (LOG.length > 300) LOG.shift(); }
+addEventListener('error', e => log('שגיאה: ' + (e.message || e)));
+addEventListener('unhandledrejection', e => log('שגיאה: ' + (e.reason && e.reason.message || e.reason)));
+function busy(msg, sub) { const b = $('#busy'); if (!msg) { b.hidden = true; return; } b.hidden = false; $('#busyMsg').textContent = msg; $('#busySub').textContent = sub || ''; }
 let toastT; function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200); }
 
 /* ================= state ================= */
@@ -21,7 +27,15 @@ let sel = null;               // selected clip id
 let T = 0, playing = false, curIdx = -1;
 let renderer = null;
 let saveT = null;
-const save = () => { clearTimeout(saveT); saveT = setTimeout(() => P && store.save(P), 500); };
+let hist = [], fut = [], lastSnap = null;
+function snapshot() { if (!P) return; const s = JSON.stringify({ clips: P.clips, color: P.color, fx: P.fx, audio: P.audio, music: P.music, texts: P.texts, beats: P.beats });
+  if (s === lastSnap) return; if (lastSnap) { hist.push(lastSnap); if (hist.length > 80) hist.shift(); fut = []; } lastSnap = s; updUndo(); }
+function restore(s) { const o = JSON.parse(s); Object.assign(P, o); for (const c of P.clips) if (!media[c.id]) { const src = Object.values(media).find(m => m.fileKey === c.fileKey); if (src) media[c.id] = { ...src, video: makeVideo(files[c.fileKey]) }; }
+  lastSnap = s; if (!P.clips.find(c => c.id === sel)) sel = P.clips[0]?.id; renderTimeline(); renderPanel(); seekTo(T); store.save(P); updUndo(); }
+function undo() { if (!hist.length) return; fut.push(lastSnap); restore(hist.pop()); toast('בוטל'); }
+function redo() { if (!fut.length) return; hist.push(lastSnap); restore(fut.pop()); }
+function updUndo() { $('#undoBtn').disabled = !hist.length; $('#redoBtn').disabled = !fut.length; }
+const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { if (!P) return; snapshot(); store.save(P); }, 450); };
 const changed = (redraw = true) => { save(); if (redraw) requestDraw(); };
 
 /* ================= home ================= */
@@ -46,46 +60,77 @@ $('#newFiles').addEventListener('change', async e => {
   const fs = [...e.target.files]; e.target.value = ''; if (!fs.length) return;
   P = newProject('פרויקט ' + new Date().toLocaleDateString('he-IL'));
   for (const k in media) delete media[k];
-  await addFiles(fs); await store.save(P); enterEditor();
+  hist = []; fut = []; lastSnap = null;
+  const n = await addFiles(fs); if (!n) { toast('לא הצלחתי לפתוח את הסרטון. פרטים ביומן.'); return; }
+  await store.save(P); enterEditor();
 });
 
 /* ================= media loading ================= */
 function makeVideo(blob) {
-  const v = document.createElement('video'); v.playsInline = true; v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
-  v.preload = 'auto'; v.crossOrigin = 'anonymous'; v.src = URL.createObjectURL(blob); $('#hiddenMedia').append(v);
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); v.setAttribute('muted', '');
+  v.preload = 'auto'; $('#hiddenMedia').append(v);
+  v.src = URL.createObjectURL(blob); v.load();
   return v;
 }
-function loaded(v) { return new Promise((res, rej) => { if (v.readyState >= 2) return res(); v.addEventListener('loadeddata', () => res(), { once: true }); v.addEventListener('error', () => rej(new Error('הסרטון לא נטען')), { once: true }); }); }
+const once = (o, ev, ms) => new Promise(r => { let done = false; const f = () => { if (!done) { done = true; o.removeEventListener(ev, f); r(true); } };
+  o.addEventListener(ev, f); if (ms) setTimeout(() => { if (!done) { done = true; o.removeEventListener(ev, f); r(false); } }, ms); });
+// iOS Safari does not decode a frame for an idle video; metadata first, then a short muted play to get pixels.
+async function loaded(v) {
+  if (v.readyState < 1 && !(await Promise.race([once(v, 'loadedmetadata', 20000), once(v, 'error').then(() => 'err')]) === true)) {
+    if (v.error || v.readyState < 1) throw new Error('הסרטון לא נטען' + (v.error ? ' (קוד ' + v.error.code + ')' : ''));
+  }
+  if (v.readyState < 2) {
+    const wasMuted = v.muted; v.muted = true;
+    try { await v.play(); } catch (e) { log('ניגון ראשוני נחסם: ' + e.message); }
+    await Promise.race([once(v, 'timeupdate', 2500), once(v, 'loadeddata', 2500)]);
+    v.pause(); v.muted = wasMuted;
+    if (v.readyState < 2) await once(v, 'canplay', 3000);
+    try { v.currentTime = 0; await once(v, 'seeked', 2000); } catch (e) {}
+  }
+  log('נטען: ' + v.videoWidth + '×' + v.videoHeight + ' ' + (v.duration || 0).toFixed(1) + 'ש׳ מצב ' + v.readyState);
+}
 async function attachClip(c) {
   const blob = files[c.fileKey]; if (!blob) return;
   const v = makeVideo(blob); await loaded(v);
   const tr = await detectTransfer(blob);
-  media[c.id] = { video: v, file: blob, hdr: tr === 18 };
+  media[c.id] = { video: v, file: blob, hdr: tr === 18, fileKey: c.fileKey };
 }
 async function addFiles(fs) {
+  let i = 0, ok = 0;
   for (const f of fs) {
+    i++; busy('מייבא סרטון ' + i + ' מתוך ' + fs.length, f.name + ' · ' + (f.size / 1048576).toFixed(0) + ' מגה');
+    log('ייבוא ' + f.name + ' ' + f.type + ' ' + (f.size / 1048576).toFixed(1) + 'MB');
     const key = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     files[key] = f;
-    store.putFile(key, f).then(ok => { if (!ok) toast('אין מספיק מקום לשמירת הסרטון במכשיר'); });
-    const v = makeVideo(f); await loaded(v).catch(() => {});
-    const c = newClip(key, f.name.replace(/\.[^.]+$/, ''), v.duration || 1);
-    const tr = await detectTransfer(f);
-    media[c.id] = { video: v, file: f, hdr: tr === 18 };
-    P.clips.push(c);
-    thumbFor(c).then(u => { c.thumb = u; if (!P.thumb) P.thumb = u; renderTimeline(); save(); });
+    try {
+      const v = makeVideo(f); await loaded(v);
+      const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 1;
+      const c = newClip(key, f.name.replace(/\.[^.]+$/, ''), dur);
+      const tr = await detectTransfer(f); log('סוג צבע: ' + tr);
+      media[c.id] = { video: v, file: f, hdr: tr === 18, fileKey: key };
+      P.clips.push(c); ok++;
+      store.putFile(key, f).then(s => { if (!s) { log('שמירה במכשיר נכשלה'); toast('אין מספיק מקום לשמור את הסרטון במכשיר'); } });
+      thumbFor(c).then(u => { if (u) { c.thumb = u; if (!P.thumb) P.thumb = u; } renderTimeline(); save(); });
+    } catch (e) { log('נכשל: ' + e.message); toast(f.name + ': ' + e.message); }
   }
+  busy(null);
+  return ok;
 }
 async function thumbFor(c) {
   const src = media[c.id].video; const v = makeVideo(files[c.fileKey]);
-  try { await loaded(v); await new Promise(r => { v.addEventListener('seeked', r, { once: true }); v.currentTime = Math.min(c.in + .3, c.out); setTimeout(r, 1500); });
+  try { await loaded(v); v.currentTime = Math.min(c.in + .3, c.out); await once(v, 'seeked', 2500);
     const cv = document.createElement('canvas'); const h = 120, w = Math.round(h * (src.videoWidth / src.videoHeight || .5625)); cv.width = w; cv.height = h;
     cv.getContext('2d').drawImage(v, 0, 0, w, h); return cv.toDataURL('image/jpeg', .7);
   } catch (e) { return null; } finally { URL.revokeObjectURL(v.src); v.remove(); }
 }
 async function openProject(p) {
-  P = p; for (const k in media) delete media[k];
-  toast('טוען…');
-  for (const c of P.clips) { if (!files[c.fileKey]) files[c.fileKey] = await store.getFile(c.fileKey); await attachClip(c).catch(() => {}); }
+  P = p; for (const k in media) delete media[k]; hist = []; fut = []; lastSnap = null;
+  P.texts = P.texts || []; P.beats = P.beats || null;
+  let i = 0;
+  for (const c of P.clips) { busy('טוען פרויקט', ++i + ' מתוך ' + P.clips.length);
+    if (!files[c.fileKey]) files[c.fileKey] = await store.getFile(c.fileKey); await attachClip(c).catch(e => log('טעינת קליף נכשלה: ' + e.message)); }
+  busy(null);
   P.clips = P.clips.filter(c => media[c.id]);
   if (P.music) { const b = files[P.music.fileKey] || await store.getFile(P.music.fileKey); if (b) setMusic(b, P.music.name, true); else P.music = null; }
   enterEditor();
@@ -97,7 +142,8 @@ function enterEditor() {
   $('#projName').value = P.name;
   if (!renderer) { try { renderer = new Renderer($('#view')); } catch (e) { toast('המכשיר לא תומך בעיבוד גרפי'); return; } }
   sel = P.clips[0]?.id || null; T = 0; curIdx = -1;
-  sizePreview(); renderTimeline(); showTab(currentTab); seekTo(0);
+  P.texts = P.texts || []; linkFonts(); snapshot();
+  sizePreview(); renderTimeline(); showTab(currentTab); seekTo(0); updUndo();
 }
 $('#projName').addEventListener('change', () => { P.name = $('#projName').value.trim() || P.name; save(); });
 $('#backBtn').addEventListener('click', () => { store.save(P); showHome(); });
@@ -116,12 +162,23 @@ function requestDraw() { if (drawQueued || playing) return; drawQueued = true; r
 function drawNow() {
   if (!P || !P.clips.length || !renderer) return;
   const a = at(P, T); if (!a) return; const m = media[a.clip.id]; if (!m || m.video.readyState < 2) return;
-  renderer.draw(m.video, T, P.color, P.fx, m.hdr && P.color.hdr !== 'off', videoFade(a.clip, a.local, a.len), zoomAt(a.clip, a.local));
+  const ov = textOverlay(T);
+  if (comparing) renderer.draw(m.video, T, NEUTRAL_C, NEUTRAL_FX, m.hdr && P.color.hdr !== 'off', 0, null, null);
+  else renderer.draw(m.video, T, P.color, P.fx, m.hdr && P.color.hdr !== 'off', videoFade(a.clip, a.local, a.len), zoomAt(a.clip, a.local), ov);
   updateClock();
+}
+const NEUTRAL_C = { ...COLOR_DEFAULT, style: null, pal: 0 }, NEUTRAL_FX = { ...FX_DEFAULT };
+let comparing = false, overCv = null;
+function textOverlay(t) {
+  if (!P.texts || !P.texts.length) return null;
+  if (!overCv) overCv = document.createElement('canvas');
+  const c = renderer.canvas; if (overCv.width !== c.width || overCv.height !== c.height) { overCv.width = c.width; overCv.height = c.height; }
+  return drawTexts(overCv, P.texts, t) ? overCv : null;
 }
 function updateClock() {
   const L = layout(P); $('#tNow').textContent = fmt(T); $('#tTotal').textContent = fmt(L.total);
-  $('#playhead').style.left = (16 + T * pxs()) + 'px';
+  const x = 16 + T * pxs(); $('#playhead').style.left = x + 'px';
+  if (playing) { const tl = $('#timeline'); const vx = x - tl.scrollLeft; if (vx > tl.clientWidth * .7 || vx < 0) tl.scrollLeft = x - tl.clientWidth * .3; }
 }
 
 /* ---------- playback ---------- */
@@ -197,11 +254,11 @@ function seekTo(t) {
 }
 
 /* ---------- timeline ---------- */
-let zoomPx = 60; // px per second baseline
+let zoomPx = 60, zoomMul = 1; // px per second
 const pxs = () => zoomPx;
 function renderTimeline() {
   const L = layout(P); const box = $('#tlClips'); box.innerHTML = '';
-  zoomPx = Math.max(24, Math.min(120, (innerWidth - 60) / Math.max(4, L.total) * 1.6));
+  zoomPx = Math.max(12, Math.min(400, (innerWidth - 60) / Math.max(4, L.total) * 1.6 * zoomMul));
   for (const it of L.items) {
     const c = it.clip, w = Math.max(24, it.len * zoomPx - 3);
     const d = el('div', { class: 'clip' + (c.id === sel ? ' sel' : '') });
@@ -221,6 +278,12 @@ function renderTimeline() {
   if (P.music) { const mu = P.music; const len = Math.min(L.total - (mu.at || 0), (mu.out ?? 9999) - (mu.in || 0));
     const sp = el('div'); sp.style.width = (mu.at || 0) * zoomPx + 'px'; sp.style.flex = 'none';
     const b = el('div', { class: 'music' }, '♪ ' + mu.name); b.style.width = Math.max(30, len * zoomPx) + 'px'; mbox.append(sp, b); }
+  const bb = $('#tlBeats'); bb.innerHTML = '';
+  if (P.beats && P.beats.length) for (const b of P.beats) { if (b > L.total) break; const k = el('i'); k.style.left = (16 + b * zoomPx) + 'px'; bb.append(k); }
+  const tb = $('#tlTexts'); tb.innerHTML = '';
+  for (const tx of P.texts || []) { const k = el('div', { class: 'tchip' + (tx.id === selText ? ' sel' : '') }, tx.text.split('\n')[0].slice(0, 18));
+    k.style.left = (16 + tx.t0 * zoomPx) + 'px'; k.style.width = Math.max(20, (tx.t1 - tx.t0) * zoomPx) + 'px';
+    k.addEventListener('click', e => { e.stopPropagation(); selText = tx.id; showTab('text'); seekTo(tx.t0 + .4); }); tb.append(k); }
   $('#tlInner').style.width = (L.total * zoomPx + innerWidth) + 'px';
   updateClock();
 }
@@ -244,7 +307,7 @@ function showTab(t) {
   currentTab = t; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   document.querySelectorAll('.panel').forEach(p => p.hidden = p.dataset.panel !== t); setPick(null); renderPanel();
 }
-function renderPanel() { const p = document.querySelector(`.panel[data-panel="${currentTab}"]`); p.innerHTML = ''; ({ clip: panelClip, color: panelColor, fx: panelFx, audio: panelAudio, export: panelExport })[currentTab](p); }
+function renderPanel() { const p = document.querySelector(`.panel[data-panel="${currentTab}"]`); p.innerHTML = ''; ({ clip: panelClip, color: panelColor, fx: panelFx, text: panelText, audio: panelAudio, export: panelExport })[currentTab](p); }
 
 function slider(label, obj, key, min, max, step = 1, opt = {}) {
   const out = el('output', {}, fmtv(obj[key], opt));
@@ -392,6 +455,48 @@ function panelFx(p) {
     el('button', { class: 'btn', onclick: () => setPick({ hint: 'גוררים כדי למקם את האור', get: () => [F.lightX, 1 - F.lightY], set: (x, y) => { F.lightX = x; F.lightY = 1 - y; } }) }, 'מיקום האור על התמונה')));
 }
 
+
+/* ---------- text panel ---------- */
+let selText = null;
+function panelText(p) {
+  P.texts = P.texts || [];
+  const L = layout(P);
+  const add = el('button', { class: 'btn primary', onclick: () => { const tx = newText(Math.min(T, Math.max(0, L.total - 1))); tx.t1 = Math.min(L.total, tx.t0 + 3); P.texts.push(tx); selText = tx.id; renderTimeline(); renderPanel(); changed(); } }, '+ טקסט מהסמן');
+  const stickers = loadStickers();
+  const stRow = el('div', { class: 'chips-scroll' });
+  stickers.forEach(s => { const b = el('button', { class: 'chip sticker' }, s.text.split('\n')[0].slice(0, 14) || '·'); b.style.fontFamily = `"${s.font}"`;
+    b.addEventListener('click', () => { const tx = { ...newText(T), ...s, id: 't' + Math.random().toString(36).slice(2, 8), t0: T, t1: Math.min(L.total, T + (s.dur || 3)) }; delete tx.sid; delete tx.dur;
+      P.texts.push(tx); selText = tx.id; renderTimeline(); renderPanel(); changed(); });
+    let pressT; b.addEventListener('pointerdown', () => { pressT = setTimeout(() => { removeSticker(s.sid); toast('המדבקה נמחקה'); renderPanel(); }, 900); });
+    b.addEventListener('pointerup', () => clearTimeout(pressT)); stRow.append(b); });
+  p.append(sec('טקסט ועיטורים', el('div', { class: 'row' }, add), stickers.length ? el('div', { class: 'hint', style: 'margin-top:8px' }, 'המדבקות שלך. לחיצה ארוכה מוחקת.') : null, stickers.length ? stRow : null));
+  const tx = P.texts.find(x => x.id === selText) || P.texts[P.texts.length - 1];
+  if (!tx) { p.append(el('div', { class: 'hint' }, 'מוסיפים טקסט, בוחרים גופן, צבע ותנועה, ושומרים כמדבקה לשימוש חוזר.')); return; }
+  selText = tx.id;
+  if (P.texts.length > 1) p.append(sec('הטקסטים בפרויקט', chips(P.texts.map(x => ({ id: x.id, name: x.text.split('\n')[0].slice(0, 12) || '·' })), tx.id, x => { selText = x.id; renderPanel(); renderTimeline(); seekTo(P.texts.find(y => y.id === x.id).t0 + .4); }, true)));
+  const ta = el('textarea', { class: 'tinput', rows: 2, dir: 'rtl' }); ta.value = tx.text;
+  ta.addEventListener('input', () => { tx.text = ta.value; renderTimeline(); changed(); });
+  p.append(sec('נוסח', ta));
+  const fontRow = el('div', { class: 'chips-scroll' });
+  for (const f of FONTS) { const b = el('button', { class: 'chip font' + (f.id === tx.font ? ' on' : '') }, f.name); b.style.fontFamily = `"${f.id}"`; b.style.fontWeight = f.weight;
+    b.addEventListener('click', async () => { tx.font = f.id; fontRow.querySelectorAll('.chip').forEach(x => x.classList.remove('on')); b.classList.add('on'); await ensureFont(f.id); changed(); }); fontRow.append(b); }
+  ensureFont(tx.font).then(() => requestDraw());
+  const sw = el('div', { class: 'swatches' });
+  for (const c of COLORS) { const s = el('button', { class: 'swatch' + (c === tx.color ? ' on' : '') }); s.style.background = c;
+    s.addEventListener('click', () => { tx.color = c; sw.querySelectorAll('.swatch').forEach(x => x.classList.remove('on')); s.classList.add('on'); changed(); }); sw.append(s); }
+  p.append(sec('גופן', fontRow), sec('צבע', sw));
+  p.append(sec('תנועה', chips(ANIMS, tx.anim, a => { tx.anim = a.id; changed(); }, true)));
+  p.append(sec('עיטור', chips(DECOS, tx.deco, d => { tx.deco = d.id; changed(); }, true)));
+  p.append(sec('עיצוב', slider('גודל', tx, 'size', 20, 160, 1), slider('זוהר', tx, 'glow', 0, 100, 1), slider('צל', tx, 'shadow', 0, 100, 1), slider('ריווח', tx, 'spacing', -10, 60, 1),
+    el('button', { class: 'btn', onclick: () => setPick({ hint: 'גוררים כדי למקם את הטקסט', get: () => [tx.x, tx.y], set: (x, y) => { tx.x = x; tx.y = y; } }) }, 'מיקום על התמונה')));
+  const tl = sl => slider(sl[0], tx, sl[1], 0, Math.max(.5, L.total), .05, { fmt: v => v.toFixed(1) + 'ש׳', onInput: () => { if (tx.t1 < tx.t0 + .3) tx.t1 = tx.t0 + .3; renderTimeline(); seekTo(sl[1] === 't0' ? tx.t0 + .3 : tx.t1 - .1); changed(); } });
+  p.append(sec('זמן', tl(['מופיע', 't0']), tl(['נעלם', 't1'])));
+  p.append(el('div', { class: 'row' },
+    el('button', { class: 'btn', onclick: () => { saveSticker(tx); toast('נשמר כמדבקה'); renderPanel(); } }, 'שמירה כמדבקה'),
+    el('button', { class: 'btn', onclick: () => { const n = { ...JSON.parse(JSON.stringify(tx)), id: 't' + Math.random().toString(36).slice(2, 8) }; P.texts.push(n); selText = n.id; renderTimeline(); renderPanel(); changed(); } }, 'שכפול'),
+    el('button', { class: 'btn warn', onclick: () => { P.texts = P.texts.filter(x => x !== tx); selText = null; renderTimeline(); renderPanel(); changed(); } }, 'מחיקה')));
+}
+
 /* ---------- audio panel ---------- */
 let meterEls = null; const meterBuf = new Float32Array(2048);
 function meterTick() {
@@ -420,6 +525,23 @@ function panelAudio(p) {
     mu ? slider('התחלה בשיר', mu, 'in', 0, Math.max(1, (musicEl && musicEl.duration) || 600), .1, { fmt: v => fmt(v), onInput: () => { save(); } }) : null,
     mu ? slider('כניסה הדרגתית', mu, 'fadeIn', 0, 8, .1, { fmt: v => v.toFixed(1) + 'ש׳', onInput: () => save() }) : null,
     mu ? slider('יציאה הדרגתית', mu, 'fadeOut', 0, 8, .1, { fmt: v => v.toFixed(1) + 'ש׳', onInput: () => save() }) : null));
+  // beats
+  const beatInfo = el('div', { class: 'hint' }, P.beats ? ('זוהו ' + P.beats.length + ' פעמות בקצב ' + A.bpm) : 'מזהים את הקצב מהשיר, או מקישים אותו ידנית למטה בדיליי.');
+  const detect = el('button', { class: 'btn', onclick: async () => {
+    if (!P.music || !musicFile) { toast('קודם מייבאים שיר'); return; }
+    busy('מזהה את הקצב…'); try { const buf = await decodeFile(musicFile); const r = detectBeats(buf);
+      A.bpm = Math.round(r.bpm); const mu = P.music; P.beats = r.beats.map(b => b - (mu.in || 0) + (mu.at || 0)).filter(b => b >= 0);
+      log('קצב ' + r.bpm); toast('קצב ' + r.bpm); } catch (e) { toast('זיהוי הקצב נכשל'); log(e.message); }
+    busy(null); if (chain) chain.update(A); renderTimeline(); renderPanel(); changed(false); } }, 'זיהוי קצב מהשיר');
+  const manual = el('button', { class: 'btn', onclick: () => { const per = 60 / A.bpm; const L = layout(P); const start = P.beats && P.beats[0] != null ? P.beats[0] % per : 0;
+    P.beats = []; for (let b = start; b <= L.total + per; b += per) P.beats.push(b); renderTimeline(); renderPanel(); changed(false); } }, 'רשת לפי הקצב הידני');
+  const nudge = d => { if (!P.beats) return; P.beats = P.beats.map(b => b + d).filter(b => b >= 0); renderTimeline(); changed(false); };
+  const fitRow = el('div', { class: 'row' }, el('span', { class: 'hint' }, 'חיתוך כל קליף אחרי'),
+    ...[1, 2, 4, 8].map(n => el('button', { class: 'chip', onclick: () => fitToBeats(n) }, n + ' פעמות')));
+  p.append(sec('קצב', el('div', { class: 'row' }, detect, manual), beatInfo,
+    P.beats ? el('div', { class: 'row', style: 'margin-top:6px' }, el('span', { class: 'hint' }, 'הזזת הרשת'), el('button', { class: 'chip', onclick: () => nudge(-.02) }, '−'), el('button', { class: 'chip', onclick: () => nudge(.02) }, '+'),
+      el('button', { class: 'chip', onclick: () => { P.beats = null; renderTimeline(); renderPanel(); changed(false); } }, 'הסרה')) : null,
+    P.beats ? fitRow : null));
   // reverb
   p.append(sec('ריוורב', chips(REVERBS, A.reverb, r => { A.reverb = r.id; upd(); }, true),
     slider('כמות', A, 'reverbMix', 0, 100, 1, o), slider('השהיה', A, 'reverbPre', 0, 120, 1, { ...o, unit: 'מ״ש' }), slider('בהירות', A, 'reverbTone', 0, 100, 1, o)));
@@ -441,6 +563,23 @@ function panelAudio(p) {
   p.append(sec('קומפרסור ועוצמה', toggle('קומפרסור', A.compOn, on => { A.compOn = on; upd(); }),
     slider('סף', A, 'thresh', -40, 0, 1, { ...o, unit: 'דציבל' }), slider('יחס', A, 'ratio', 1, 12, .5, { ...o, fmt: v => v + ':1' }),
     slider('פיצוי', A, 'makeup', 0, 12, .5, { ...o, unit: 'דציבל' }), slider('עוצמה כללית', A, 'gain', -12, 12, .5, { ...o, unit: 'דציבל' })));
+}
+
+function fitToBeats(n) {
+  if (!P.beats || P.beats.length < 2) return;
+  const per = (P.beats[P.beats.length - 1] - P.beats[0]) / (P.beats.length - 1);
+  let t = 0, bi = 0, changedCount = 0;
+  for (let i = 0; i < P.clips.length; i++) {
+    const c = P.clips[i], dur = (media[c.id] && media[c.id].video.duration) || c.dur;
+    // first cut lands on the n-th beat after the clip starts (first clip also absorbs the lead-in before beat 0)
+    while (bi < P.beats.length && P.beats[bi] <= t + .05) bi++;
+    let target = P.beats[Math.min(P.beats.length - 1, bi + n - 1)];
+    if (target == null || target <= t) target = t + n * per;
+    let len = target - t;
+    if (c.in + len > dur) { const fit = Math.floor((dur - c.in - (P.beats[bi] - t)) / per); len = fit > 0 ? (P.beats[bi] - t) + fit * per : dur - c.in; }
+    c.out = Math.min(dur, c.in + Math.max(.2, len)); t += c.out - c.in; changedCount++;
+  }
+  renderTimeline(); renderPanel(); changed(); toast('הקליפים נחתכו לפי הקצב');
 }
 async function setMusic(blob, name, restoring = false) {
   if (!restoring) { const key = 'm' + Date.now().toString(36); files[key] = blob; store.putFile(key, blob); P.music = { fileKey: key, name, in: 0, at: 0, fadeIn: 0, fadeOut: 1.5 }; save(); }
@@ -469,7 +608,7 @@ function panelExport(p) {
     if (exporting || !P.clips.length) return; stop(); exporting = true; cancelExport = false; go.disabled = true; go.textContent = 'מייצא…'; cancel.hidden = false; pw.hidden = false; res.innerHTML = '';
     const t0 = performance.now();
     try {
-      const r = await exportProject({ project: P, media, musicFile, renderer, preset: pr, kbps: P.kbps, onProgress: (v, t) => { prog.value = v; ptxt.textContent = t; }, cancelled: () => cancelExport });
+      const r = await exportProject({ project: P, media, musicFile, renderer, overlay: textOverlay, preset: pr, kbps: P.kbps, onProgress: (v, t) => { prog.value = v; ptxt.textContent = t; }, cancelled: () => cancelExport });
       lastExport = r; showResult(res, r, (performance.now() - t0) / 1000);
     } catch (e) { ptxt.textContent = e.message; toast(e.message); }
     finally { exporting = false; go.disabled = false; go.textContent = 'ייצוא הסרטון'; cancel.hidden = true; for (const k in media) { media[k].video.muted = false; media[k].video.playbackRate = 1; } sizePreview(); seekTo(T); }
@@ -492,6 +631,20 @@ function showResult(box, r, took) {
   row.append(el('a', { class: 'btn', href: url, download: name }, 'שמירה'));
   box.append(row);
 }
+
+/* ---------- toolbar extras ---------- */
+$('#undoBtn').addEventListener('click', undo); $('#redoBtn').addEventListener('click', redo);
+$('#zoomIn').addEventListener('click', () => { zoomMul = Math.min(8, zoomMul * 1.5); renderTimeline(); });
+$('#zoomOut').addEventListener('click', () => { zoomMul = Math.max(.25, zoomMul / 1.5); renderTimeline(); });
+(() => { const b = $('#cmpBtn'); const on = e => { e.preventDefault(); comparing = true; b.classList.add('on'); drawNow(); }; const off = () => { comparing = false; b.classList.remove('on'); drawNow(); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointerleave', off); b.addEventListener('pointercancel', off); })();
+$('#logBtn').addEventListener('click', () => {
+  const caps = ['VideoEncoder', 'AudioEncoder', 'VideoFrame', 'AudioDecoder'].map(k => k + ': ' + (typeof window[k] !== 'undefined' ? 'כן' : 'לא')).join(' · ');
+  $('#logText').textContent = navigator.userAgent + '\n' + caps + '\n\n' + (LOG.join('\n') || 'היומן ריק');
+  $('#logSheet').hidden = false; });
+$('#logClose').addEventListener('click', () => $('#logSheet').hidden = true);
+$('#logCopy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#logText').textContent).then(() => toast('הועתק')); });
+document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); } if (e.key === ' ' && P && !$('#editor').hidden && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') { e.preventDefault(); playing ? stop() : play(); } });
 
 /* ================= boot ================= */
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

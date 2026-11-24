@@ -23,7 +23,7 @@ function seek(v, t) {
 }
 
 // media: { [clipId]: { video, file, hdr } }, musicFile: File|null
-export async function exportProject({ project, media, musicFile, renderer, preset, kbps, onProgress, cancelled }) {
+export async function exportProject({ project, media, musicFile, renderer, overlay, preset, kbps, onProgress, cancelled }) {
   const L = layout(project);
   if (!L.items.length) throw new Error('אין קליפים בפרויקט');
   const first = media[L.items[0].clip.id].video;
@@ -84,7 +84,7 @@ export async function exportProject({ project, media, musicFile, renderer, prese
         if (enc.encodeQueueSize > 6) { dropped++; return; }
         last = mt;
         const local = mt - c.in;
-        renderer.draw(v, it.start + local, project.color, project.fx, m.hdr && project.color.hdr !== 'off', videoFade(c, local, it.len), zoomAt(c, local));
+        renderer.draw(v, it.start + local, project.color, project.fx, m.hdr && project.color.hdr !== 'off', videoFade(c, local, it.len), zoomAt(c, local), overlay ? overlay(it.start + local) : null);
         const vf = new VideoFrame(renderer.canvas, { timestamp: Math.round((it.start + local) * 1e6), duration: Math.round(1e6 / fps) });
         enc.encode(vf, { keyFrame: count % (fps * 2) === 0 }); vf.close(); count++; n++;
         if (n % 12 === 0) { if (winT !== null) { const ratio = 12 / ((mt - winT) * fps);

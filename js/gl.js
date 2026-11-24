@@ -61,7 +61,7 @@ void main(){
   o=vec4(s,1.);
 }`;
 const FS_FINAL = COMMON + `
-uniform sampler2D uTex,uSoft;
+uniform sampler2D uTex,uSoft,uOver; uniform float uUseOver;
 uniform float uGlow,uHal,uDream,uGrain,uGrainSize,uSpark,uLeak,uFade,uTime,uVig,uVigSize,uVigSoft,uVigSwirl,uVigBlur,uVigMode,uVigRound;
 uniform vec3 uVigColor; uniform vec2 uRes;
 void main(){
@@ -102,6 +102,7 @@ void main(){
     c+=vec3(1.,.85,.62)*k*uSpark*.45+(n-.5)*uSpark*.025;
   }
   c*=1.-uFade;
+  if(uUseOver>.5){ vec4 ov=texture(uOver,v); c=mix(c,ov.rgb/max(ov.a,1e-4),ov.a); }
   o=vec4(clamp(c,0.,1.),1.);
 }`;
 
@@ -114,7 +115,7 @@ export class Renderer {
     const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    this.vid = this.tex();
+    this.vid = this.tex(); this.over = this.tex();
     this.luts = { hlgfix: this.lut3(LUTS.hlgfix), zahav: this.lut3(LUTS.zahav) };
     this.fbo = {};
   }
@@ -154,7 +155,7 @@ export class Renderer {
     this.fbo = { main: mk(w, h), a: mk(gw, gh), b: mk(gw, gh) };
   }
   // c: color settings, fx: effect settings (see state.js defaults); hdr: bool; fade 0..1
-  draw(source, time, c, fx, hdr, fade = 0, zoom = null) {
+  draw(source, time, c, fx, hdr, fade = 0, zoom = null, overlay = null) {
     const gl = this.gl, w = this.canvas.width, h = this.canvas.height, F = this.fbo;
     gl.bindTexture(gl.TEXTURE_2D, this.vid);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -198,6 +199,11 @@ export class Renderer {
     V('uVig', fx.vig / 100); V('uVigSize', .25 + (1 - fx.vigSize / 100) * .9); V('uVigSoft', .15 + fx.vigSoft / 100 * 1.1);
     V('uVigSwirl', fx.vigSwirl / 100); V('uVigBlur', fx.vigBlur / 100); V('uVigMode', fx.vigMode); V('uVigRound', fx.vigRound / 100);
     const vc = fx.vigColor || [0.55, 0.32, 0.2]; gl.uniform3f(g.u.uVigColor, vc[0], vc[1], vc[2]);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.over); gl.uniform1i(g.u.uOver, 2);
+    if (overlay) { gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, overlay);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); }
+    V('uUseOver', overlay ? 1 : 0);
     gl.uniform2f(g.u.uRes, w, h);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.flush();

@@ -192,3 +192,38 @@ export function meterLevels(an, arr) {
   for (let i = 0; i < arr.length; i++) { const x = Math.abs(arr[i]); if (x > pk) pk = x; sq += x * x; }
   return { peak: 20 * Math.log10(pk + 1e-9), rms: 10 * Math.log10(sq / arr.length + 1e-12) };
 }
+
+// ---------- beat detection ----------
+// Onset envelope from band-limited energy flux, tempo by autocorrelation, phase by comb alignment.
+export function detectBeats(buf, maxSec = 600) {
+  const sr = buf.sampleRate, n = Math.min(buf.length, Math.floor(maxSec * sr));
+  const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const hop = Math.round(sr / 100), frames = Math.floor(n / hop);   // 100 frames per second
+  const env = new Float32Array(frames);
+  let lp = 0, prev = 0;
+  for (let f = 0; f < frames; f++) {
+    let e = 0;
+    for (let i = f * hop, end = i + hop; i < end; i++) { const x = (L[i] + R[i]) * .5; lp += .08 * (x - lp); const hpx = x - lp; e += lp * lp * 2 + hpx * hpx; }
+    const v = Math.log(1e-6 + e);
+    env[f] = Math.max(0, v - prev); prev = v;
+  }
+  // normalize & smooth
+  let mean = 0; for (const x of env) mean += x; mean /= frames || 1;
+  for (let i = 0; i < frames; i++) env[i] = Math.max(0, env[i] - mean);
+  let best = { bpm: 0, score: -1 };
+  for (let bpm = 70; bpm <= 180; bpm += .5) {
+    const lag = 6000 / bpm; let s = 0;
+    for (let i = Math.ceil(lag * 2); i < frames; i++) { const a = env[i - Math.round(lag)], b = env[i - Math.round(lag * 2)]; s += env[i] * (a + .5 * b); }
+    s /= frames; const prior = Math.exp(-Math.pow(Math.log2(bpm / 115), 2) * 1.2); s *= prior;
+    if (s > best.score) best = { bpm, score: s };
+  }
+  // refine tempo with fractional lags
+  const scoreAt = bpm => { const lag = 6000 / bpm; let s = 0; for (let i = Math.ceil(lag * 2) + 1; i < frames; i++) { const j = i - lag, k = Math.floor(j), f = j - k; s += env[i] * (env[k] * (1 - f) + env[k + 1] * f); } return s; };
+  let fine = best.bpm, fs = -1; for (let bpm = best.bpm - 1; bpm <= best.bpm + 1; bpm += .05) { const s = scoreAt(bpm); if (s > fs) { fs = s; fine = bpm; } }
+  best.bpm = fine;
+  const period = 6000 / best.bpm;
+  let bestPh = 0, bestS = -1;
+  for (let ph = 0; ph < period; ph += 1) { let s = 0; for (let t = ph; t < frames; t += period) s += env[Math.round(t)] || 0; if (s > bestS) { bestS = s; bestPh = ph; } }
+  const beats = []; for (let t = bestPh; t < frames; t += period) beats.push(t / 100);
+  return { bpm: Math.round(best.bpm * 10) / 10, beats };
+}
