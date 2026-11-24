@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
 <title>קליידוסקופ</title>
-<link rel="stylesheet" href="style.css?v=18">
+<link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
 <div id="bg"></div>
@@ -26,16 +26,21 @@
   <label class="cta" for="newFiles"><span class="plus">+</span> פרויקט חדש</label>
   <input id="newFiles" type="file" accept="video/*" multiple hidden>
   <input id="newFilesAny" type="file" multiple hidden>
-  <div class="center"><label class="link-btn" for="newFilesAny">לא רואים את הסרטונים? בחירה מכל הקבצים</label></div>
-  <div class="hint center">אפשר לבחור כמה סרטונים יחד. הם ייכנסו לפי הסדר.</div>
-  <div id="projects" class="projects"></div>
-  <a id="apkLink" class="glass tip apk" href="kaleidoscope.apk" hidden>
-    <b>להתקנה כאפליקציה באנדרואיד</b><span>מורידים את הקובץ ופותחים אותו. אם הטלפון שואל, מאשרים התקנה ממקור זה.</span></a>
-  <div class="foot"><button id="logBtn" class="link-btn">יומן ובדיקת מכשיר</button><div id="verLbl" class="hint"></div></div>
-  <div id="installTip" class="glass tip" hidden>
-    כדי להתקין: בספארי לוחצים על כפתור השיתוף ובוחרים בהוספה למסך הבית.
+  <div id="projWrap" hidden>
+    <div class="row-title">הפרויקטים שלי</div>
+    <div id="projects" class="projects"></div>
   </div>
+  <button id="moreBtn" class="more-btn" aria-label="עוד">•••</button>
 </section>
+<div id="moreSheet" class="sheet" hidden><div class="sheet-card glass">
+  <div class="row" style="justify-content:space-between"><b>עוד</b><button id="moreClose" class="chip">סגירה</button></div>
+  <label class="btn" for="newFilesAny">פרויקט חדש מכל הקבצים</label>
+  <div class="hint">כשהסרטונים לא מופיעים בבחירה הרגילה.</div>
+  <a id="apkLink" class="btn" href="kaleidoscope.apk" hidden>התקנה כאפליקציה באנדרואיד</a>
+  <div id="installTip" class="hint" hidden>להתקנה: בספארי לוחצים על כפתור השיתוף ובוחרים בהוספה למסך הבית.</div>
+  <button id="logBtn" class="btn">יומן ובדיקת מכשיר</button>
+  <div id="verLbl" class="hint"></div>
+</div></div>
 
 <section id="editor" class="screen" hidden>
   <header class="topbar">
@@ -52,19 +57,23 @@
       <canvas id="refView" hidden></canvas>
       <div id="wipe" hidden><span class="wl-ours">שלנו</span><span class="wl-cc">קאפקאט</span></div>
       <div id="tbox" hidden><i class="tcorner"></i></div>
-      <div id="fsBar"><button id="fsPlay">▶</button><div id="fsProg"><i></i></div><button id="fsClose" aria-label="סגירה">✕</button></div>
+      <div id="fsBar"><button id="fsPlay" aria-label="ניגון"><svg viewBox="0 0 24 24"><path d="M8 5.6v12.8a1.1 1.1 0 0 0 1.7.92l9.6-6.4a1.1 1.1 0 0 0 0-1.84L9.7 4.68A1.1 1.1 0 0 0 8 5.6z"/></svg></button><div id="fsProg"><i></i></div><button id="fsClose" aria-label="סגירה">✕</button></div>
       <div id="pickLayer" hidden><div id="pickDot"></div><div class="pick-hint" id="pickHint"></div></div>
     </div>
   </div>
 
   <div class="transport">
-    <button id="toStart" class="mini-btn jump" aria-label="להתחלה">⏮</button>
-    <button id="playBtn" class="play" aria-label="ניגון">▶</button>
-    <button id="toEnd" class="mini-btn jump" aria-label="לסוף">⏭</button>
-    <div class="time"><span id="tNow">0:00.0</span> <span class="dim">/</span> <span id="tTotal">0:00.0</span></div>
-    <button id="fsBtn" class="mini-btn" aria-label="מסך מלא">⛶</button>
+    <div class="time"><span id="tNow">0:00.0</span><span class="dim"> / </span><span id="tTotal">0:00.0</span></div>
+    <div class="ctrls" dir="ltr">
+      <button id="toStart" class="ctl" aria-label="להתחלה"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="2.6" height="14" rx="1"/><path d="M19 5.8v12.4a1 1 0 0 1-1.5.86L9.2 12.9a1 1 0 0 1 0-1.73l8.3-6.2A1 1 0 0 1 19 5.8z"/></svg></button>
+      <button id="playBtn" class="play" aria-label="ניגון" data-playing="0"><svg viewBox="0 0 24 24"><path d="M8 5.6v12.8a1.1 1.1 0 0 0 1.7.92l9.6-6.4a1.1 1.1 0 0 0 0-1.84L9.7 4.68A1.1 1.1 0 0 0 8 5.6z"/></svg></button>
+      <button id="toEnd" class="ctl" aria-label="לסוף"><svg viewBox="0 0 24 24"><rect x="16.4" y="5" width="2.6" height="14" rx="1"/><path d="M5 5.8v12.4a1 1 0 0 0 1.5.86l8.3-6.16a1 1 0 0 0 0-1.73L6.5 4.97A1 1 0 0 0 5 5.8z"/></svg></button>
+    </div>
+<div class="tools">
+    <button id="fsBtn" class="mini-btn icon" aria-label="מסך מלא"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
     <button id="cmpBtn" class="mini-btn" title="לחיצה ארוכה מציגה את המקור">לפני</button>
-    <label class="mini-btn" for="addFiles">+ קליפ</label>
+    <label class="mini-btn icon" for="addFiles" aria-label="הוספת קליפ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></label>
+    </div>
     <input id="addFiles" type="file" accept="video/*" multiple hidden>
     <input id="addFilesAny" type="file" multiple hidden>
   </div>
@@ -121,6 +130,6 @@
   }
   setTimeout(function () { if (!window.__appReady) { var b = document.getElementById('errBar'); b.hidden = false; b.querySelector('span').textContent = 'האפליקציה לא נטענה עד הסוף.'; } }, 4000);
 </script>
-<script type="module" src="app.js?v=18"></script>
+<script type="module" src="app.js?v=19"></script>
 </body>
 </html>
