@@ -1,20 +1,22 @@
 // Kaleidoscope — app shell: home, editor, timeline, panels, playback.
-import { Renderer } from './gl.js';
-import { detectTransfer } from './media.js';
-import { layout, at, videoFade, audioGain, zoomAt, fmt } from './timeline.js';
-import { buildChain, REVERBS, DELAY_NOTES, meterLevels, detectBeats, decodeFile } from './audio.js';
-import { FONTS, ANIMS, DECOS, COLORS, linkFonts, ensureFont, newText, drawTexts, loadStickers, saveSticker, removeSticker } from './text.js';
-import { exportProject, outSize } from './export.js';
-import { customStyles, addStyle, removeStyle, profiles, addProfile, removeProfile, parseCube, learnFromExport } from './profiles.js';
-import { store, newProject, newClip, STYLES, LOOKS, PRESETS, FX_DEFAULT, COLOR_DEFAULT } from './state.js';
+import { Renderer } from './gl.js?v=4';
+import { detectTransfer } from './media.js?v=4';
+import { layout, at, videoFade, audioGain, zoomAt, fmt } from './timeline.js?v=4';
+import { buildChain, REVERBS, DELAY_NOTES, meterLevels, detectBeats, decodeFile } from './audio.js?v=4';
+import { FONTS, ANIMS, DECOS, COLORS, linkFonts, ensureFont, newText, drawTexts, loadStickers, saveSticker, removeSticker } from './text.js?v=4';
+import { exportProject, outSize } from './export.js?v=4';
+import { customStyles, addStyle, removeStyle, profiles, addProfile, removeProfile, parseCube, learnFromExport } from './profiles.js?v=4';
+import { store, newProject, newClip, STYLES, LOOKS, PRESETS, FX_DEFAULT, COLOR_DEFAULT } from './state.js?v=4';
 
+const LOG = [];
 const $ = s => document.querySelector(s);
+const on = (s, ev, f, o) => { const e = typeof s === 'string' ? document.querySelector(s) : s; if (e) e.addEventListener(ev, f, o); else log('חסר רכיב ' + s); };
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) { if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== null) e.setAttribute(k, v); }
   for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k)); return e; };
-const LOG = [];
 export function log(m) { LOG.push(new Date().toLocaleTimeString('he-IL') + '  ' + m); if (LOG.length > 300) LOG.shift(); }
-addEventListener('error', e => log('שגיאה: ' + (e.message || e)));
+addEventListener('error', e => { log('שגיאה: ' + (e.message || e)); showErr(e.message); });
+function showErr(m) { const b = document.getElementById('errBar'); if (b && m) { b.hidden = false; b.querySelector('span').textContent = m; } }
 addEventListener('unhandledrejection', e => log('שגיאה: ' + (e.reason && e.reason.message || e.reason)));
 function busy(msg, sub) { const b = $('#busy'); if (!msg) { b.hidden = true; return; } b.hidden = false; $('#busyMsg').textContent = msg; $('#busySub').textContent = sub || ''; }
 let toastT; function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200); }
@@ -57,7 +59,7 @@ async function showHome() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   $('#installTip').hidden = standalone || !/iPhone|iPad/.test(navigator.userAgent);
 }
-$('#newFiles').addEventListener('change', async e => {
+on('#newFiles', 'change', async e => {
   const fs = [...e.target.files]; e.target.value = ''; if (!fs.length) return;
   P = newProject('פרויקט ' + new Date().toLocaleDateString('he-IL'));
   for (const k in media) delete media[k];
@@ -146,10 +148,10 @@ function enterEditor() {
   P.texts = P.texts || []; linkFonts(); snapshot();
   sizePreview(); renderTimeline(); showTab(currentTab); seekTo(0); updUndo();
 }
-$('#projName').addEventListener('change', () => { P.name = $('#projName').value.trim() || P.name; save(); });
-$('#backBtn').addEventListener('click', () => { store.save(P); showHome(); });
-$('#toExport').addEventListener('click', () => showTab('export'));
-$('#addFiles').addEventListener('change', async e => { const fs = [...e.target.files]; e.target.value = ''; if (!fs.length) return;
+on('#projName', 'change', () => { P.name = $('#projName').value.trim() || P.name; save(); });
+on('#backBtn', 'click', () => { store.save(P); showHome(); });
+on('#toExport', 'click', () => showTab('export'));
+on('#addFiles', 'change', async e => { const fs = [...e.target.files]; e.target.value = ''; if (!fs.length) return;
   toast('מוסיף…'); await addFiles(fs); renderTimeline(); sizePreview(); renderPanel(); changed(); });
 function sizePreview() {
   const c = P.clips[0]; if (!c || !renderer) return;
@@ -212,8 +214,8 @@ function stop() {
   for (const k in media) media[k].video.pause();
   if (musicEl) musicEl.pause();
 }
-$('#playBtn').addEventListener('click', () => playing ? stop() : play());
-$('#view').addEventListener('click', () => { if (!$('#pickLayer').hidden) return; playing ? stop() : play(); });
+on('#playBtn', 'click', () => playing ? stop() : play());
+on('#view', 'click', () => { if (!$('#pickLayer').hidden) return; playing ? stop() : play(); });
 
 function loop() {
   if (!playing) return;
@@ -308,11 +310,11 @@ function trimHandle(h, c, which) {
   h.addEventListener('pointerup', () => { changed(false); renderPanel(); });
   h.addEventListener('click', e => e.stopPropagation());
 }
-$('#timeline').addEventListener('click', e => { if (e.target.id === 'timeline' || e.target.id === 'tlInner' || e.target.id === 'tlMusic') { const r = $('#tlInner').getBoundingClientRect(); seekTo((e.clientX - r.left - 16) / zoomPx); } });
+on('#timeline', 'click', e => { if (e.target.id === 'timeline' || e.target.id === 'tlInner' || e.target.id === 'tlMusic') { const r = $('#tlInner').getBoundingClientRect(); seekTo((e.clientX - r.left - 16) / zoomPx); } });
 
 /* ================= panels ================= */
 let currentTab = 'clip';
-$('#tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showTab(b.dataset.tab); });
+on('#tabs', 'click', e => { const b = e.target.closest('button'); if (b) showTab(b.dataset.tab); });
 function showTab(t) {
   currentTab = t; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   document.querySelectorAll('.panel').forEach(p => p.hidden = p.dataset.panel !== t); setPick(null); renderPanel();
@@ -409,7 +411,7 @@ function setPick(pk) {
   $('#pickHint').textContent = pk.hint; placeDot();
 }
 function placeDot() { if (!pick) return; const [x, y] = pick.get(); const d = $('#pickDot'); d.style.left = x * 100 + '%'; d.style.top = y * 100 + '%'; }
-(() => { const layer = $('#pickLayer');
+(() => { const layer = $('#pickLayer'); if (!layer) return;
   const mv = e => { const r = $('#view').getBoundingClientRect(); const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
     pick.set(x, y); placeDot(); requestDraw(); };
   layer.addEventListener('pointerdown', e => { layer.setPointerCapture(e.pointerId); mv(e); });
@@ -668,7 +670,7 @@ function showResult(box, r, took) {
 /* ---------- learn a style from CapCut ---------- */
 function openSheet(...kids) { const c = $('#sheetCard'); c.innerHTML = ''; c.append(...kids); $('#sheet').hidden = false; }
 function closeSheet() { $('#sheet').hidden = true; }
-$('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') closeSheet(); });
+on('#sheet', 'click', e => { if (e.target.id === 'sheet') closeSheet(); });
 function learnSheet() {
   const fileIn = el('input', { type: 'file', accept: 'video/*', hidden: '' });
   const nameIn = el('input', { class: 'tinput one', placeholder: 'שם הסגנון, למשל אחד מקאפקאט', dir: 'rtl' });
@@ -706,7 +708,7 @@ function learnSheet() {
 
 /* ---------- resizable panel ---------- */
 (() => {
-  const g = $('#grab'); const root = document.documentElement;
+  const g = $('#grab'); if (!g) return; const root = document.documentElement;
   let h = +(localStorage.getItem('kaleidoscope.panelH') || 0) || Math.round(innerHeight * .42);
   const apply = () => { h = Math.max(140, Math.min(innerHeight * .78, h)); root.style.setProperty('--panelH', h + 'px'); };
   apply();
@@ -720,22 +722,23 @@ function learnSheet() {
 })();
 
 /* ---------- toolbar extras ---------- */
-$('#undoBtn').addEventListener('click', undo); $('#redoBtn').addEventListener('click', redo);
-$('#zoomIn').addEventListener('click', () => { zoomMul = Math.min(8, zoomMul * 1.5); renderTimeline(); });
-$('#zoomOut').addEventListener('click', () => { zoomMul = Math.max(.25, zoomMul / 1.5); renderTimeline(); });
-(() => { const b = $('#cmpBtn'); const on = e => { e.preventDefault(); comparing = true; b.classList.add('on'); drawNow(); }; const off = () => { comparing = false; b.classList.remove('on'); drawNow(); };
+on('#undoBtn', 'click', undo); on('#redoBtn', 'click', redo);
+on('#zoomIn', 'click', () => { zoomMul = Math.min(8, zoomMul * 1.5); renderTimeline(); });
+on('#zoomOut', 'click', () => { zoomMul = Math.max(.25, zoomMul / 1.5); renderTimeline(); });
+(() => { const b = $('#cmpBtn'); if (!b) return; const on = e => { e.preventDefault(); comparing = true; b.classList.add('on'); drawNow(); }; const off = () => { comparing = false; b.classList.remove('on'); drawNow(); };
   b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointerleave', off); b.addEventListener('pointercancel', off); })();
-$('#logBtn').addEventListener('click', () => {
+on('#logBtn', 'click', () => {
   const caps = ['VideoEncoder', 'AudioEncoder', 'VideoFrame', 'AudioDecoder'].map(k => k + ': ' + (typeof window[k] !== 'undefined' ? 'כן' : 'לא')).join(' · ');
   $('#logText').textContent = navigator.userAgent + '\n' + caps + '\n\n' + (LOG.join('\n') || 'היומן ריק');
   $('#logSheet').hidden = false; });
-$('#logClose').addEventListener('click', () => $('#logSheet').hidden = true);
-$('#logCopy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#logText').textContent).then(() => toast('הועתק')); });
+on('#logClose', 'click', () => $('#logSheet').hidden = true);
+on('#logCopy', 'click', () => { navigator.clipboard && navigator.clipboard.writeText($('#logText').textContent).then(() => toast('הועתק')); });
 document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); } if (e.key === ' ' && P && !$('#editor').hidden && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') { e.preventDefault(); playing ? stop() : play(); } });
 
 /* ================= boot ================= */
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 addEventListener('resize', () => P && !$('#editor').hidden && renderTimeline());
 document.addEventListener('visibilitychange', () => { if (document.hidden && P) store.save(P); });
-showHome();
+try { showHome(); } catch (e) { log(e.message); showErr(e.message); }
+window.__appReady = true;
 window.__app = { get P() { return P; }, media, exportProject, play, stop, seekTo };

@@ -1,5 +1,5 @@
 // Rendering engine: color grade + full-frame artistic layers, WebGL2.
-import { LUTS } from './luts.js';
+import { LUTS } from './luts.js?v=4';
 
 const VS = `#version 300 es
 in vec2 p; out vec2 v; void main(){ v=p*.5+.5; gl_Position=vec4(p,0.,1.); }`;

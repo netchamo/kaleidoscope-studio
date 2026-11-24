@@ -1,7 +1,7 @@
 // Export: render every clip through the GL pipeline into H.264, mix audio offline, mux MP4.
-import { Mux, isAnnexB, annexBToAvc, buildAvcC } from './media.js';
-import { layout, videoFade, zoomAt } from './timeline.js';
-import { decodeVideoAudio, decodeFile, renderMix, encodeAac } from './audio.js';
+import { Mux, isAnnexB, annexBToAvc, buildAvcC } from './media.js?v=4';
+import { layout, videoFade, zoomAt } from './timeline.js?v=4';
+import { decodeVideoAudio, decodeFile, renderMix, encodeAac } from './audio.js?v=4';
 
 export async function pickCodec(w, h, bitrate, fps) {
   if (typeof VideoEncoder === 'undefined') return null;

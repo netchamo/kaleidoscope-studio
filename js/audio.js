@@ -1,5 +1,5 @@
 // Audio: decoding, studio FX chain (EQ, compressor, reverb, delay, limiter), offline mix, AAC encode.
-import { Mux, extractAac } from './media.js';
+import { Mux, extractAac } from './media.js?v=4';
 
 export const SR = 48000;
 
