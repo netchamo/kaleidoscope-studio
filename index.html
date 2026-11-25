@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
 <title>קליידוסקופ</title>
-<link rel="stylesheet" href="style.css?v=23">
+<link rel="stylesheet" href="style.css?v=24">
 </head>
 <body>
 <div id="bg"></div>
@@ -26,6 +26,14 @@
   <label class="cta" for="newFiles"><span class="plus">+</span> פרויקט חדש</label>
   <input id="newFiles" type="file" accept="video/*" multiple hidden>
   <input id="newFilesAny" type="file" multiple hidden>
+  <div class="tools">
+    <div class="row-title">בנייה בלי פרויקט</div>
+    <div class="tool-row">
+      <button id="toolStyle" class="tool">סגנון צבע<small>מקאפקאט</small></button>
+      <button id="toolOrn" class="tool">עיטור<small>מלוגו</small></button>
+      <button id="toolSticker" class="tool">מדבקה<small>מתמונה</small></button>
+    </div>
+  </div>
   <div id="projWrap" hidden>
     <div class="row-title">הפרויקטים שלי</div>
     <div id="projects" class="projects"></div>
@@ -131,6 +139,6 @@
   }
   setTimeout(function () { if (!window.__appReady) { var b = document.getElementById('errBar'); b.hidden = false; b.querySelector('span').textContent = 'האפליקציה לא נטענה עד הסוף.'; } }, 4000);
 </script>
-<script type="module" src="app.js?v=23"></script>
+<script type="module" src="app.js?v=24"></script>
 </body>
 </html>
